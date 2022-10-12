@@ -14,7 +14,8 @@
 "ui.statusline.normal" = {fg = "base", bg = "rose", modifiers = ["bold"]}
 "ui.statusline.select" = {fg = "base", bg = "iris", modifiers = ["bold"]}
 "ui.statusline.inactive" = { fg = "iris", bg = "surface" }
-"ui.cursor" = { fg = "rose", modifiers = ["reversed"] }
+"ui.cursor" = { fg = "subtle", modifiers = ["reversed"] }
+"ui.cursor.primary" = { fg = "rose", modifiers = ["reversed"] }
 "ui.text" = { fg = "text" }
 "ui.text.focus" = { fg = "foam", modifiers = ["bold"]}
 "ui.text.info" = {fg = "pine", modifiers = ["bold"]}
