@@ -11,22 +11,26 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Deserializer};
 use toml::{map::Map, Value};
 
+use crate::graphics::UnderlineStyle;
 pub use crate::graphics::{Color, Modifier, Style};
 
-pub static DEFAULT_THEME: Lazy<Theme> = Lazy::new(|| {
-    //    let raw_theme: Value = toml::from_slice(include_bytes!("../../theme.toml"))
-    //        .expect("Failed to parse default theme");
-    //    Theme::from(raw_theme)
-
+pub static DEFAULT_THEME_DATA: Lazy<Value> = Lazy::new(|| {
     toml::from_slice(include_bytes!("../../theme.toml")).expect("Failed to parse default theme")
 });
-pub static BASE16_DEFAULT_THEME: Lazy<Theme> = Lazy::new(|| {
-    //    let raw_theme: Value = toml::from_slice(include_bytes!("../../base16_theme.toml"))
-    //        .expect("Failed to parse base 16 default theme");
-    //    Theme::from(raw_theme)
 
+pub static BASE16_DEFAULT_THEME_DATA: Lazy<Value> = Lazy::new(|| {
     toml::from_slice(include_bytes!("../../base16_theme.toml"))
         .expect("Failed to parse base 16 default theme")
+});
+
+pub static DEFAULT_THEME: Lazy<Theme> = Lazy::new(|| Theme {
+    name: "default".into(),
+    ..Theme::from(DEFAULT_THEME_DATA.clone())
+});
+
+pub static BASE16_DEFAULT_THEME: Lazy<Theme> = Lazy::new(|| Theme {
+    name: "base16_default".into(),
+    ..Theme::from(BASE16_DEFAULT_THEME_DATA.clone())
 });
 
 #[derive(Clone, Debug)]
@@ -52,7 +56,12 @@ impl Loader {
             return Ok(self.base16_default());
         }
 
-        self.load_theme(name, name, false).map(Theme::from)
+        let theme = self.load_theme(name, name, false).map(Theme::from)?;
+
+        Ok(Theme {
+            name: name.into(),
+            ..theme
+        })
     }
 
     // load the theme and its parent recursively and merge them
@@ -77,11 +86,16 @@ impl Loader {
                 )
             })?;
 
-            let parent_theme_toml = self.load_theme(
-                parent_theme_name,
-                base_them_name,
-                base_them_name == parent_theme_name,
-            )?;
+            let parent_theme_toml = match parent_theme_name {
+                // load default themes's toml from const.
+                "default" => DEFAULT_THEME_DATA.clone(),
+                "base16_default" => BASE16_DEFAULT_THEME_DATA.clone(),
+                _ => self.load_theme(
+                    parent_theme_name,
+                    base_them_name,
+                    base_them_name == parent_theme_name,
+                )?,
+            };
 
             self.merge_themes(parent_theme_toml, theme_toml)
         } else {
@@ -135,8 +149,9 @@ impl Loader {
     // Loads the theme data as `toml::Value` first from the user_dir then in default_dir
     fn load_toml(&self, path: PathBuf) -> Result<Value> {
         let data = std::fs::read(&path)?;
+        let value = toml::from_slice(data.as_slice())?;
 
-        toml::from_slice(data.as_slice()).context("Failed to deserialize theme")
+        Ok(value)
     }
 
     // Returns the path to the theme with the name
@@ -179,8 +194,10 @@ impl Loader {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Theme {
+    name: String,
+
     // UI styles are stored in a HashMap
     styles: HashMap<String, Style>,
     // tree-sitter highlight styles are stored in a Vec to optimize lookups
@@ -199,6 +216,7 @@ impl From<Value> for Theme {
             styles,
             scopes,
             highlights,
+            ..Default::default()
         }
     }
 }
@@ -216,6 +234,7 @@ impl<'de> Deserialize<'de> for Theme {
             styles,
             scopes,
             highlights,
+            ..Default::default()
         })
     }
 }
@@ -263,6 +282,10 @@ impl Theme {
     #[inline]
     pub fn highlight(&self, index: usize) -> Style {
         self.highlights[index]
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn get(&self, scope: &str) -> Style {
@@ -378,19 +401,48 @@ impl ThemePalette {
             .ok_or(format!("Theme: invalid modifier: {}", value))
     }
 
+    pub fn parse_underline_style(value: &Value) -> Result<UnderlineStyle, String> {
+        value
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .ok_or(format!("Theme: invalid underline style: {}", value))
+    }
+
     pub fn parse_style(&self, style: &mut Style, value: Value) -> Result<(), String> {
         if let Value::Table(entries) = value {
-            for (name, value) in entries {
+            for (name, mut value) in entries {
                 match name.as_str() {
                     "fg" => *style = style.fg(self.parse_color(value)?),
                     "bg" => *style = style.bg(self.parse_color(value)?),
+                    "underline" => {
+                        let table = value
+                            .as_table_mut()
+                            .ok_or("Theme: underline must be table")?;
+                        if let Some(value) = table.remove("color") {
+                            *style = style.underline_color(self.parse_color(value)?);
+                        }
+                        if let Some(value) = table.remove("style") {
+                            *style = style.underline_style(Self::parse_underline_style(&value)?);
+                        }
+
+                        if let Some(attr) = table.keys().next() {
+                            return Err(format!("Theme: invalid underline attribute: {attr}"));
+                        }
+                    }
                     "modifiers" => {
                         let modifiers = value
                             .as_array()
                             .ok_or("Theme: modifiers should be an array")?;
 
                         for modifier in modifiers {
-                            *style = style.add_modifier(Self::parse_modifier(modifier)?);
+                            if modifier
+                                .as_str()
+                                .map_or(false, |modifier| modifier == "underlined")
+                            {
+                                *style = style.underline_style(UnderlineStyle::Line);
+                            } else {
+                                *style = style.add_modifier(Self::parse_modifier(modifier)?);
+                            }
                         }
                     }
                     _ => return Err(format!("Theme: invalid style attribute: {}", name)),
